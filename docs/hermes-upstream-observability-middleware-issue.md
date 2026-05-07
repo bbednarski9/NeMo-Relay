@@ -28,6 +28,30 @@ The remaining gaps are more specific: stable cross-hook correlation IDs, full
 sanitized API request/response payloads, API failure/retry hooks, subagent start
 events, and richer structured status/error metadata.
 
+## Target Architecture
+
+The desired end state is first-party Hermes middleware that lets an observer
+plugin emit complete traces without monkey-patching Hermes internals and without
+routing traffic through a sidecar gateway.
+
+```mermaid
+flowchart LR
+    Runtime["Hermes runtime"] --> HookManager["Plugin hook manager"]
+    HookManager --> Observer["Telemetry plugin"]
+    Observer --> ATIF["ATIF trajectory"]
+    Observer --> OI["OpenInference / Phoenix"]
+
+    Runtime --> TurnHooks["Turn hooks"]
+    Runtime --> ApiHooks["API request hooks"]
+    Runtime --> ToolHooks["Tool hooks"]
+    Runtime --> SubagentHooks["Subagent hooks"]
+
+    TurnHooks --> HookManager
+    ApiHooks --> HookManager
+    ToolHooks --> HookManager
+    SubagentHooks --> HookManager
+```
+
 ## Current Code Evidence
 
 Paths below refer to the Hermes source tree.
@@ -238,6 +262,19 @@ Recommended minimum:
 This is the highest-priority addition because it lets plugins build correct
 parent/child spans without heuristic matching.
 
+Expected trace relationship:
+
+```mermaid
+flowchart TD
+    Session["session_id: agent session"] --> Turn["turn_id: user turn"]
+    Turn --> Api1["api_request_id: provider call"]
+    Api1 --> Tool1["tool_call_id: tool call"]
+    Tool1 --> Subagent["subagent_id: delegated child"]
+    Subagent --> ChildSession["child_session_id: child agent session"]
+    ChildSession --> ChildTurn["child turn_id"]
+    ChildTurn --> ChildApi["child api_request_id"]
+```
+
 ### 2. Full sanitized API request payload
 
 Extend `pre_api_request` with a bounded, sanitized request object:
@@ -305,6 +342,27 @@ This would let native plugins record the actual LLM output and tool-call
 declarations at the request span, instead of relying on the later per-turn
 `post_llm_call` event.
 
+Expected per-turn request flow:
+
+```mermaid
+sequenceDiagram
+    participant Agent as Hermes Agent
+    participant Hooks as Plugin Hooks
+    participant Provider as LLM Provider
+    participant Observer as Telemetry Plugin
+
+    Agent->>Hooks: pre_llm_call(turn_id)
+    Hooks->>Observer: start turn span
+    Agent->>Hooks: pre_api_request(turn_id, api_request_id, request)
+    Hooks->>Observer: start LLM span
+    Agent->>Provider: provider request
+    Provider-->>Agent: provider response
+    Agent->>Hooks: post_api_request(turn_id, api_request_id, usage, response)
+    Hooks->>Observer: end LLM span
+    Agent->>Hooks: post_llm_call(turn_id)
+    Hooks->>Observer: end turn span
+```
+
 ### 4. API request error/retry hooks
 
 Add hooks for attempts that do not reach successful `post_api_request`:
@@ -369,6 +427,27 @@ subagent_stop(
     error=...,
     ended_at=...,
 )
+```
+
+Expected subagent lifecycle:
+
+```mermaid
+sequenceDiagram
+    participant Parent as Parent Agent
+    participant Hooks as Plugin Hooks
+    participant Child as Child Agent
+    participant Observer as Telemetry Plugin
+
+    Parent->>Hooks: pre_tool_call(delegate_task, tool_call_id, turn_id)
+    Hooks->>Observer: start delegate tool span
+    Parent->>Hooks: subagent_start(parent_turn_id, parent_tool_call_id, subagent_id, child_session_id)
+    Hooks->>Observer: start child agent span
+    Parent->>Child: run delegated task
+    Child-->>Parent: summary, tokens, tool_trace
+    Parent->>Hooks: subagent_stop(subagent_id, child_session_id, status, tokens)
+    Hooks->>Observer: end child agent span
+    Parent->>Hooks: post_tool_call(delegate_task, tool_call_id, status)
+    Hooks->>Observer: end delegate tool span
 ```
 
 ### 6. Structured tool status and error metadata
