@@ -1,0 +1,17 @@
+name: nemoflow
+version: "0.1.0"
+description: "Prototype NeMo Flow ATIF exporter for Hermes native plugin hooks."
+author: NVIDIA
+hooks:
+  - on_session_start
+  - on_session_finalize
+  - on_session_reset
+  - pre_llm_call
+  - post_llm_call
+  - pre_api_request
+  - post_api_request
+  - api_request_error
+  - pre_tool_call
+  - post_tool_call
+  - subagent_start
+  - subagent_stop

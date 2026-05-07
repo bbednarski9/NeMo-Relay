@@ -185,6 +185,89 @@ class TestLlmResponseCodecProtocol:
 
 
 class TestResponseCodecObjectParam:
+    def test_manual_call_end_response_codec_attaches_annotation(self):
+        """manual llm.call_end() accepts response_codec for end-event annotations."""
+        captured_events = []
+
+        def capture(event):
+            captured_events.append(event)
+
+        subscribers.register("test-manual-call-end-response-codec", capture)
+
+        try:
+            handle = llm.call(
+                "manual-codec-llm",
+                LLMRequest(
+                    {},
+                    {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                ),
+            )
+            llm.call_end(
+                handle,
+                {
+                    "id": "chatcmpl-manual",
+                    "model": "gpt-4",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hello!"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11},
+                },
+                response_codec=OpenAIChatCodec(),
+            )
+
+            end_events = [
+                e for e in captured_events if e.kind == "scope" and e.category == "llm" and e.scope_category == "end"
+            ]
+            assert len(end_events) == 1
+
+            annotated = end_events[0].annotated_response
+            assert annotated is not None
+            assert annotated.usage == {"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11}
+            assert annotated.response_text() == "Hello!"
+
+        finally:
+            subscribers.deregister("test-manual-call-end-response-codec")
+
+    def test_manual_call_end_accepts_annotated_response_mapping(self):
+        """manual llm.call_end() accepts an explicit JSON annotation mapping."""
+        captured_events = []
+
+        def capture(event):
+            captured_events.append(event)
+
+        subscribers.register("test-manual-call-end-annotated-response", capture)
+
+        try:
+            handle = llm.call(
+                "manual-annotated-llm",
+                LLMRequest({}, {"model": "gpt-4", "messages": []}),
+            )
+            llm.call_end(
+                handle,
+                {"status": "ok"},
+                annotated_response={
+                    "model": "gpt-4",
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+                },
+            )
+
+            end_events = [
+                e for e in captured_events if e.kind == "scope" and e.category == "llm" and e.scope_category == "end"
+            ]
+            assert len(end_events) == 1
+
+            annotated = end_events[0].annotated_response
+            assert annotated is not None
+            assert annotated.model == "gpt-4"
+            assert annotated.usage == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+
+        finally:
+            subscribers.deregister("test-manual-call-end-annotated-response")
+
     async def test_response_codec_accepts_builtin_object(self):
         """response_codec= accepts a built-in codec object, not a string."""
         captured_events = []
