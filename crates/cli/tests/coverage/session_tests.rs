@@ -302,6 +302,76 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
 }
 
 #[tokio::test]
+async fn orphan_subagent_stop_records_mark_in_atif_without_crashing() {
+    // Regression test for NMF-93 issue 1. hermes-agent v0.13.0 fires `subagent_stop` for
+    // subagent contexts it never opened with a matching `subagent_start`. The sidecar must
+    // record a `subagent_end_without_start` mark in the ATIF so the orphan is visible to
+    // operators and downstream consumers, without corrupting the scope stack.
+    let temp = tempfile::tempdir().unwrap();
+    let config = GatewayConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        openai_base_url: "http://127.0.0.1".into(),
+        anthropic_base_url: "http://127.0.0.1".into(),
+        atif_dir: Some(temp.path().to_path_buf()),
+        openinference_endpoint: None,
+        metadata: None,
+        plugin_config: None,
+    };
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    manager
+        .apply_events(
+            &headers,
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "orphan-subagent".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_start".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::SubagentEnded(SubagentEvent {
+                    session_id: "orphan-subagent".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "subagent_stop".into(),
+                    subagent_id: "never-started".into(),
+                    payload: json!({
+                        "hook_event_name": "subagent_stop",
+                        "subagent_id": "never-started"
+                    }),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::AgentEnded(SessionEvent {
+                    session_id: "orphan-subagent".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_finalize".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    // Session must close cleanly even though the subagent_stop had no matching start.
+    assert!(manager.inner.lock().await.is_empty());
+
+    let path = temp.path().join("orphan-subagent.atif.json");
+    let atif: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let steps = atif["steps"].as_array().unwrap();
+    let recorded_orphan = steps.iter().any(|step| {
+        step["source"] == json!("system")
+            && step["message"]["hook_event_name"] == json!("subagent_stop")
+            && step["message"]["subagent_id"] == json!("never-started")
+    });
+    assert!(
+        recorded_orphan,
+        "orphan subagent_stop must surface as a system step in ATIF; steps were {steps:#?}"
+    );
+}
+
+#[tokio::test]
 async fn handles_out_of_order_subagent_and_tool_end_events() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),

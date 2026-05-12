@@ -689,6 +689,16 @@ impl Session {
     fn end_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
         let Some(scope) = self.subagents.get(&event.subagent_id).cloned() else {
+            // Hermes v0.13.0 fires `subagent_stop` for subagent contexts it never opened with a
+            // matching `subagent_start`. The trace still records `subagent_end_without_start` so
+            // the orphan is visible downstream; this stderr line surfaces the same to operators.
+            eprintln!(
+                "nemo-flow sidecar: orphan {} for unknown subagent_id={:?} on session {:?} (agent={})",
+                event.event_name,
+                event.subagent_id,
+                event.session_id,
+                event.agent_kind.as_str()
+            );
             return self.mark(
                 "subagent_end_without_start",
                 SessionEvent {
@@ -893,6 +903,10 @@ impl Session {
 
     // Emits a mark event after ensuring the agent scope exists. Generic and unknown hooks use this
     // path so unsupported agent events remain visible without changing scope structure.
+    //
+    // Mark events deliberately do not show `fn`/`parent` in ATIF — they are scope-attached
+    // checkpoints, not nested function calls. Hook events that map to runtime calls (LLM, tool,
+    // subagent scope) keep their ancestry through `llm_call`, `tool_call`, and `push_scope`.
     fn mark(&mut self, name: &str, event_payload: SessionEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event_payload.metadata.clone())?;
         emit_mark_event(

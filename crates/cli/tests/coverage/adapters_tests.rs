@@ -563,3 +563,90 @@ fn stop_responses_preserve_vendor_shapes() {
     assert!(matches!(cursor.events[0], NormalizedEvent::AgentEnded(_)));
     assert_eq!(cursor.response, json!({ "continue": true }));
 }
+
+#[test]
+fn hermes_empty_payload_with_unknown_event_emits_no_events() {
+    // Regression test for NMF-93 issue 4. Hermes teardown can flush a final hook with no stdin
+    // after `on_session_finalize`, which `read_hook_payload` normalizes to `{}`. The adapter
+    // must drop those payloads instead of routing them as HookMark — otherwise the ATIF gets a
+    // trailing empty step and the session manager opens an orphan `hook-<uuid>` session.
+    let headers = HeaderMap::new();
+
+    let empty_object = hermes::adapt(json!({}), &headers);
+    assert!(
+        empty_object.events.is_empty(),
+        "expected no events for empty object payload, got {:?}",
+        empty_object.events
+    );
+    assert_eq!(empty_object.response, json!({}));
+
+    let null_payload = hermes::adapt(Value::Null, &headers);
+    assert!(
+        null_payload.events.is_empty(),
+        "expected no events for null payload, got {:?}",
+        null_payload.events
+    );
+
+    // Empty payload that nevertheless carries a recognizable name in another key must still
+    // produce a HookMark — the guard only fires for fully unrecognizable, empty payloads.
+    let named_payload = hermes::adapt(
+        json!({
+            "event_name": "custom_marker",
+            "session_id": "hermes-session"
+        }),
+        &headers,
+    );
+    assert!(
+        !named_payload.events.is_empty(),
+        "named hook events must still produce a normalized event"
+    );
+}
+
+#[test]
+fn adapter_injects_hook_event_name_into_object_payload() {
+    // Regression test for NMF-93 issue 2. Several Hermes hook payloads carry the event name
+    // under `event_name`/`event`/`type` rather than `hook_event_name`. Trace inspectors and
+    // eval harnesses that read `hook_event_name` from the step's `data` saw `(none)` for those
+    // events. The common helpers now normalize the payload so the canonical key is always
+    // populated downstream while leaving payloads that already carry it untouched.
+    let headers = HeaderMap::new();
+
+    // Payload uses `event` instead of `hook_event_name` — Hermes shell hooks do this for some
+    // teardown events. After normalization, the resulting event's payload must surface the
+    // canonical key so downstream consumers find it at the expected path.
+    let outcome = hermes::adapt(
+        json!({
+            "event": "custom_marker",
+            "session_id": "hermes-session"
+        }),
+        &headers,
+    );
+    match &outcome.events[0] {
+        NormalizedEvent::HookMark(event) => {
+            assert_eq!(
+                event.payload["hook_event_name"],
+                json!("custom_marker"),
+                "hook_event_name must be injected when payload lacks the canonical key"
+            );
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+
+    // Payload already carries `hook_event_name` — normalization must not clobber it.
+    let outcome = hermes::adapt(
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "tool_name": "terminal",
+            "tool_input": {},
+            "session_id": "hermes-session",
+            "extra": { "tool_call_id": "tool-1" }
+        }),
+        &headers,
+    );
+    match &outcome.events[0] {
+        NormalizedEvent::ToolStarted(event) => {
+            assert_eq!(event.payload["hook_event_name"], json!("pre_tool_call"));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}

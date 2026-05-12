@@ -100,6 +100,11 @@ fn metadata(payload: &Value, headers: &HeaderMap, kind: AgentKind, event_name: &
 
 // Creates a root session event using the common session-id and metadata extraction rules so
 // lifecycle, marks, notifications, and compaction events all carry identical correlation fields.
+//
+// The payload is normalized so `hook_event_name` is always present on object payloads. Hermes
+// shell hooks fire under several name keys (`event_name`, `event`, `type`); without this
+// normalization the downstream step data carries (none) at the `hook_event_name` path that
+// trace inspectors and eval harnesses check.
 pub(crate) fn common_session_event(
     payload: &Value,
     headers: &HeaderMap,
@@ -110,9 +115,26 @@ pub(crate) fn common_session_event(
         session_id: session_id(payload, headers),
         agent_kind: kind,
         event_name: event_name.clone(),
-        payload: payload.clone(),
+        payload: payload_with_event_name(payload, &event_name),
         metadata: metadata(payload, headers, kind, &event_name),
     }
+}
+
+// Returns a payload clone with `hook_event_name` set when missing. Non-object payloads are
+// returned unchanged because the normalization target is the object key downstream consumers
+// read from. The key is only written when absent, so adapters that already carry the canonical
+// name preserve their original payload shape.
+fn payload_with_event_name(payload: &Value, event_name: &str) -> Value {
+    let mut cloned = payload.clone();
+    if let Value::Object(object) = &mut cloned
+        && !object.contains_key("hook_event_name")
+    {
+        object.insert(
+            "hook_event_name".to_string(),
+            Value::String(event_name.to_string()),
+        );
+    }
+    cloned
 }
 
 // Creates a subagent event and tolerates sparse agent payloads by using the gateway subagent

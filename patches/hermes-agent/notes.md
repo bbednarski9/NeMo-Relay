@@ -412,3 +412,100 @@ Success signal:
   failures
 - The structural and live smoke steps in the `Smoke Validation` section still
   work before you hand the patch to another operator
+
+## Upstream hermes-agent Issues
+
+Two ATIF trajectory artifacts originate in hermes-agent itself, not the sidecar.
+The sidecar carries workarounds today but the underlying behavior should be
+filed against the hermes-agent project so the workarounds can be retired.
+
+Observed against `hermes-agent v0.13.0` (2026.5.7). NeMo-Flow tracking issue:
+`NMF-93`.
+
+### Issue A — Orphan `subagent_stop` without matching `subagent_start`
+
+Hermes fires the `subagent_stop` hook for subagent contexts that it never opened
+with a `subagent_start`. End-to-end runs through the sidecar show a dangling
+subagent end in the ATIF trajectory with no corresponding begin event.
+
+Reproduction:
+
+- Run `hermes chat --provider custom --model nvidia/zai-org/glm-5.1
+  --accept-hooks` with a few user turns.
+- Inspect the resulting trajectory at
+  `${HERMES_NEMO_FLOW_ATIF_DIR:-${HERMES_HOME}/atif}/<session>.atif.json`.
+- A `system` step appears with `hook_event_name: "subagent_stop"` and no prior
+  `subagent_start` hook fired for the same subagent id during the session.
+
+Expected: every `subagent_stop` hook is preceded by a `subagent_start` hook for
+the same subagent id, or the `subagent_stop` is suppressed when no subagent
+was opened.
+
+Sidecar workaround (already shipped): `Session::end_subagent`
+(`crates/cli/src/session.rs`) records a `subagent_end_without_start` mark in
+the ATIF and writes a stderr warning so operators can see the orphan from the
+sidecar logs. The orphan still surfaces in the trajectory — it is preserved
+intentionally as evidence — and downstream consumers must tolerate it.
+
+What to include when filing upstream:
+
+- hermes-agent version and `hermes chat` command line used.
+- The session id and a snippet of the affected `.atif.json` showing the
+  orphan step.
+- Whether the run involved the ACG path
+  (`HERMES_NEMO_FLOW_ACG_ENABLED=1`) — this seam is the most likely caller of
+  the unmatched subagent termination.
+
+### Issue B — `on_session_finalize` does not fire on abrupt exit
+
+`on_session_finalize` only fires on a graceful `/quit`. When the user exits via
+`Ctrl+D`, sends `SIGINT`, or otherwise terminates the process mid-session, the
+finalize hook is never invoked. Anything that runs only from `on_session_finalize`
+silently drops the last segment of the session.
+
+Reproduction:
+
+- Start `hermes chat ...` with the integration enabled.
+- After at least one assistant turn completes, press `Ctrl+D` instead of
+  `/quit`.
+- The sidecar logs do not show `on_session_finalize` for the session id.
+  Without the sidecar workaround the final ATIF on disk would lag the actual
+  session boundary by one turn.
+
+Expected: `on_session_finalize` (or an equivalent terminal hook) fires for
+every closed session, regardless of whether the user exited gracefully.
+
+Sidecar workaround (already shipped, commit `affefc4`): the Hermes adapter
+emits a synthetic `TurnEnded` after every `on_session_end` hook so the session
+manager snapshots ATIF at every user-turn boundary. `Session::end_agent` is
+idempotent on duplicate `AgentEnded` so a later graceful finalize cannot
+overwrite the snapshot with an empty trajectory.
+
+The workaround keeps the trajectory complete through the last *completed*
+turn but does not capture turn state that was in flight when the process was
+killed. Fixing the upstream hook is the only way to make finalize-only
+behavior reliable.
+
+What to include when filing upstream:
+
+- Which exit paths were tested (Ctrl+D, SIGINT, SIGTERM, window close).
+- Whether the hook fires for `on_session_reset` (`/new`) but not for abrupt
+  exit, or fails for both.
+- Operator expectation that finalize fires unconditionally as a teardown
+  contract, mirroring how Claude Code's `SessionEnd` hook behaves.
+
+### How to retire the workarounds
+
+Once both upstream issues are fixed:
+
+- Issue A: remove the orphan stderr warning in `Session::end_subagent` and
+  decide whether to keep the `subagent_end_without_start` mark as defense in
+  depth or drop it as well.
+- Issue B: remove the synthetic `TurnEnded` emission in the Hermes adapter
+  (`crates/cli/src/adapters/hermes.rs`) and rely on `on_session_finalize` for
+  the trajectory snapshot. The duplicate-finalize idempotency guard in
+  `Session::end_agent` should stay — it is cheap and protects against any
+  integration that retries terminal hooks.
+
+Track both retirement steps under the same NeMo-Flow issue that closes
+`NMF-93`'s upstream-side block.

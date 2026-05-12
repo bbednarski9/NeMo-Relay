@@ -17,6 +17,17 @@ use crate::model::{AgentKind, LlmEvent, NormalizedEvent};
 /// hook delivery problems affect the invoking agent.
 pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let event_name = event_name(&payload);
+    // Hermes session teardown can flush a hook with empty stdin after `on_session_finalize`,
+    // which `read_hook_payload` normalizes to `{}`. Without a recognizable event name there is
+    // no useful runtime event to record, and emitting a HookMark would add a trailing empty
+    // step to the ATIF trajectory (and open an orphan `hook-<uuid>` session because the empty
+    // payload has no session id).
+    if event_name == "unknown" && is_empty_payload(&payload) {
+        return AdapterOutcome {
+            events: vec![],
+            response: json!({}),
+        };
+    }
     let normalized = normalize_name(&event_name);
     if normalized == "preapirequest" {
         return AdapterOutcome {
@@ -174,4 +185,16 @@ fn hermes_string_at(payload: &Value, key: &str) -> Option<String> {
 
 fn hermes_value_at(payload: &Value, key: &str) -> Option<Value> {
     value_at(payload, &[key]).or_else(|| value_at(payload, &["extra", key]))
+}
+
+// Returns true when the payload carries no field worth recording. `{}` is treated as empty
+// because `read_hook_payload` normalizes missing/empty stdin to that shape; `null` is treated
+// as empty for the same reason. Non-object payloads with content fall through so the adapter
+// still surfaces them as HookMarks for visibility.
+fn is_empty_payload(payload: &Value) -> bool {
+    match payload {
+        Value::Null => true,
+        Value::Object(object) => object.is_empty(),
+        _ => false,
+    }
 }
