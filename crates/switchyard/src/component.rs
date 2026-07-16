@@ -134,6 +134,26 @@ pub enum ContextMode {
     AtofRequired,
 }
 
+/// Cache lifetime requested for a target's Anthropic system prompt.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum PromptCacheTtl {
+    /// Five-minute ephemeral cache entry.
+    #[serde(rename = "5m")]
+    FiveMinutes,
+    /// One-hour ephemeral cache entry.
+    #[serde(rename = "1h")]
+    OneHour,
+}
+
+/// Optional target-side prompt-cache policy.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PromptCacheConfig {
+    /// Lifetime for the provider cache entry.
+    pub ttl: PromptCacheTtl,
+}
+
 /// Exact Relay-owned backend binding for one Switchyard backend ID.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -152,6 +172,9 @@ pub struct TargetBinding {
     /// Backend headers resolved from environment variables.
     #[serde(default)]
     pub header_env: BTreeMap<String, String>,
+    /// Optional Anthropic system-prompt cache policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache: Option<PromptCacheConfig>,
 }
 
 /// Trusted fallback target IDs for each inbound protocol.
@@ -1153,6 +1176,16 @@ impl SwitchyardRuntime {
             .as_object_mut()
             .ok_or_else(|| "translated request body is not an object".to_string())?;
         object.insert("model".into(), Json::String(binding.model.clone()));
+        if let Some(prompt_cache) = &binding.prompt_cache {
+            let ttl = match prompt_cache.ttl {
+                PromptCacheTtl::FiveMinutes => {
+                    switchyard_translation::AnthropicPromptCacheTtl::FiveMinutes
+                }
+                PromptCacheTtl::OneHour => switchyard_translation::AnthropicPromptCacheTtl::OneHour,
+            };
+            switchyard_translation::apply_anthropic_prompt_cache(&mut routed.content, ttl)
+                .map_err(|error| format!("prompt-cache policy failed: {error}"))?;
+        }
         if let Some(headers) = self.target_headers.get(&decision.route.backend_id) {
             routed.headers.extend(headers.clone());
         }
@@ -1462,6 +1495,11 @@ fn validate_target_bindings(config: &SwitchyardConfig) -> Result<(), String> {
                 "target {id:?} endpoint must be {:?} for {}",
                 target.protocol.endpoint(),
                 target.protocol.label()
+            ));
+        }
+        if target.prompt_cache.is_some() && target.protocol != WireProtocol::AnthropicMessages {
+            return Err(format!(
+                "target {id:?} prompt_cache requires protocol anthropic_messages"
             ));
         }
         if !exact_bindings.insert((

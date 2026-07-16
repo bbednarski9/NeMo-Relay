@@ -32,7 +32,68 @@ fn binding(protocol: WireProtocol, model: &str) -> TargetBinding {
         base_url: "http://127.0.0.1:9999".into(),
         headers: BTreeMap::new(),
         header_env: BTreeMap::new(),
+        prompt_cache: None,
     }
+}
+
+#[test]
+fn anthropic_target_prompt_cache_is_applied_after_cross_protocol_translation() {
+    let mut config = config("http://127.0.0.1:1/v1/routing/decision".into());
+    let mut target = binding(WireProtocol::AnthropicMessages, "selected-anthropic");
+    target.prompt_cache = Some(PromptCacheConfig {
+        ttl: PromptCacheTtl::FiveMinutes,
+    });
+    config.targets.insert("selected-anthropic".into(), target);
+    let runtime = SwitchyardRuntime::new(config).expect("configuration should be valid");
+    let decision = RoutingDecision {
+        schema_version: ROUTING_DECISION_SCHEMA_VERSION.into(),
+        decision_id: "cache-decision".into(),
+        router: crate::contract::DecisionProvider {
+            name: "stage_router".into(),
+            version: "1".into(),
+        },
+        route: crate::contract::RoutingTarget {
+            tier: "efficient".into(),
+            target_model: "selected-anthropic".into(),
+            backend_id: "selected-anthropic".into(),
+            target_protocol_profile: "anthropic_messages".into(),
+            target_endpoint: "/v1/messages".into(),
+        },
+        baseline_route: None,
+        confidence: None,
+        reason_code: None,
+        reason_summary: None,
+        metadata: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    };
+
+    let routed = runtime
+        .apply_target(WireProtocol::OpenaiChat, chat_request(), &decision)
+        .expect("request should translate");
+    assert_eq!(
+        routed.content["system"],
+        json!([{
+            "type": "text",
+            "text": "system",
+            "cache_control": {"type": "ephemeral", "ttl": "5m"},
+        }])
+    );
+}
+
+#[test]
+fn prompt_cache_is_rejected_for_non_anthropic_targets() {
+    let mut config = config("http://127.0.0.1:1/v1/routing/decision".into());
+    config
+        .targets
+        .get_mut("selected-chat")
+        .unwrap()
+        .prompt_cache = Some(PromptCacheConfig {
+        ttl: PromptCacheTtl::FiveMinutes,
+    });
+    let error = SwitchyardRuntime::new(config)
+        .err()
+        .expect("invalid target should be rejected");
+    assert!(error.contains("prompt_cache requires protocol anthropic_messages"));
 }
 
 fn config(decision_api_url: String) -> SwitchyardConfig {
