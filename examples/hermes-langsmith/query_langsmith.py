@@ -21,9 +21,7 @@ def _mapping(value: Any, fallback_key: str) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Query a self-hosted LangSmith project populated by the Hermes example."
-    )
+    parser = argparse.ArgumentParser(description="Query a LangSmith project populated by the Hermes example.")
     parser.add_argument("--api-url", default=os.environ.get("LANGSMITH_ENDPOINT"))
     parser.add_argument("--project", default=os.environ.get("LANGSMITH_PROJECT", "hermes-nemo-relay-smoke"))
     parser.add_argument("--since-minutes", type=int, default=30)

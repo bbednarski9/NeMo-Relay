@@ -7,28 +7,25 @@ SPDX-License-Identifier: Apache-2.0
 
 This example uses Hermes Agent's first-party `observability/nemo_relay` plugin
 and a custom NeMo Relay `plugins.toml`. It sends a deterministic Hermes run to
-either a local OTLP capture server or a self-hosted LangSmith deployment.
+either a local OTLP capture server or LangSmith Cloud.
 
-The local run verifies the full export contract without credentials:
+The two configuration files contain only the activation and export settings
+needed by this path:
 
-- Hermes loads its built-in NeMo Relay integration from an isolated
-  `HERMES_HOME`.
-- NeMo Relay accepts the generated observability component configuration.
-- ATOF `0.1` scope events and an ATIF `v1.7` trajectory are written locally.
-- The OTLP request contains OpenInference attributes and the exact LangSmith
-  authentication and project headers.
+- [`config.yaml`](./config.yaml) enables Hermes' bundled plugin.
+- [`plugins.toml.template`](./plugins.toml.template) configures one NeMo Relay
+  OpenInference endpoint. Its rendered `plugins.toml` references the API-key
+  environment variable without storing the key.
 
-The LangSmith run uses the same agent, provider fixture, component, and
-OpenInference projection. Only the OTLP destination and API key change.
+Hermes uses `config.yaml`, and NeMo Relay uses `plugins.toml` (plural). The
+bundled Hermes plugin has its own repository-owned `plugin.yaml`; users do not
+need to author a `config.toml` or `plugin.toml` for this integration.
 
 ## Why OpenInference over OTLP
 
-| Surface | Role in this example | Send directly to LangSmith? |
-|---|---|---|
-| ATOF | Canonical NeMo Relay event stream for debugging | No; retained as local JSONL |
-| ATIF | Completed agent trajectory for replay or offline evaluation | No; retained as local JSON |
-| OpenTelemetry | Transport and trace tree | Yes, using OTLP/HTTP protobuf |
-| OpenInference | LLM, tool, chain, input, output, model, and token semantics on OTLP spans | Yes; this is the selected endpoint type |
+OTLP/HTTP protobuf is the transport. OpenInference is the semantic projection
+on those spans. This example deliberately omits ATOF and ATIF exporters so the
+configuration proves only the LangSmith trace path.
 
 LangSmith accepts OTLP and recognizes OpenInference attributes such as
 `openinference.span.kind`, `input.value`, `output.value`, `llm.model_name`, and
@@ -72,39 +69,30 @@ The command prints the artifact directory after all checks pass. Its rendered
 `plugins.toml` is the exact configuration Hermes consumed. The directory also
 contains:
 
-- `atof/events.jsonl`
-- `atif/trajectory-<session-id>.json`
+- `hermes-home/config.yaml`
 - `otel-capture.jsonl`
 - `provider-requests.jsonl`
-- Hermes stdout, stderr, and plugin activation logs
+- Hermes stdout and stderr
 
 Artifacts default to the repository's ignored `artifacts/` directory. Set
 `HERMES_LANGSMITH_ARTIFACT_DIR` to choose a stable path.
 
-## Export to Self-Hosted LangSmith
-
-Use the LangSmith API URL, not the browser UI URL. For a conventional
-self-hosted deployment, the SDK API and trace-specific OTLP endpoints are:
-
-```text
-https://langsmith.example.com/api/v1
-https://langsmith.example.com/api/v1/otel/v1/traces
-```
+## Export to LangSmith Cloud
 
 Set the API endpoint, API key, and project, then run:
 
 ```bash
-export LANGSMITH_ENDPOINT="https://langsmith.example.com/api/v1"
+export LANGSMITH_ENDPOINT="https://api.smith.langchain.com"
 export LANGSMITH_API_KEY="<secret>"
 export LANGSMITH_PROJECT="hermes-nemo-relay-smoke"
 
 ./examples/hermes-langsmith/run.sh langsmith
 ```
 
-The runner derives
-`$LANGSMITH_ENDPOINT/otel/v1/traces`. Set `LANGSMITH_OTLP_ENDPOINT` explicitly
-when a reverse proxy exposes OTLP elsewhere. The API key is referenced through
-`header_env`; it is never written to `plugins.toml` or the artifacts.
+The runner derives `https://api.smith.langchain.com/otel/v1/traces`. Set
+`LANGSMITH_OTLP_ENDPOINT` explicitly for a different regional deployment. The
+API key is referenced through `header_env`; it is never written to
+`plugins.toml` or the artifacts.
 
 In LangSmith, open **Tracing Projects**, select
 `hermes-nemo-relay-smoke`, and inspect the newest root run. The trace tree

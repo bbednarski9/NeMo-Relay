@@ -33,11 +33,10 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_directory="${HERMES_LANGSMITH_ARTIFACT_DIR:-$repo_root/artifacts/hermes-langsmith-$timestamp}"
 project="${LANGSMITH_PROJECT:-hermes-nemo-relay-smoke}"
 mkdir -p \
-    "$artifact_directory/atif" \
-    "$artifact_directory/atof" \
     "$artifact_directory/hermes-home" \
     "$artifact_directory/provider-barrier" \
     "$artifact_directory/workspace"
+cp "$example_root/config.yaml" "$artifact_directory/hermes-home/config.yaml"
 
 provider_pid=""
 collector_pid=""
@@ -94,7 +93,7 @@ if [[ "$mode" == "local" ]]; then
     )"
 else
     if [[ -z "${LANGSMITH_API_KEY:-}" ]]; then
-        echo "set LANGSMITH_API_KEY for the self-hosted LangSmith deployment" >&2
+        echo "set LANGSMITH_API_KEY for the LangSmith deployment" >&2
         exit 2
     fi
     if [[ -n "${LANGSMITH_OTLP_ENDPOINT:-}" ]]; then
@@ -111,8 +110,6 @@ plugins_toml="$artifact_directory/plugins.toml"
 python3 "$example_root/render_config.py" \
     --template "$example_root/plugins.toml.template" \
     --output "$plugins_toml" \
-    --atof-directory "$artifact_directory/atof" \
-    --atif-directory "$artifact_directory/atif" \
     --otlp-traces-endpoint "$otlp_traces_endpoint" \
     --project "$project"
 
@@ -132,18 +129,6 @@ if ! "$hermes_python" -c \
     >"$artifact_directory/plugin-validation.json"; then
     echo "NeMo Relay rejected the rendered plugins.toml:" >&2
     sed -n '1,200p' "$artifact_directory/plugin-validation.json" >&2
-    echo "artifacts: $artifact_directory" >&2
-    exit 1
-fi
-
-if ! env \
-    HERMES_HOME="$artifact_directory/hermes-home" \
-    DISABLE_AUTOUPDATER=1 \
-    hermes plugins enable observability/nemo_relay \
-    >"$artifact_directory/plugin-enable.stdout" \
-    2>"$artifact_directory/plugin-enable.stderr"; then
-    echo "Hermes could not enable observability/nemo_relay:" >&2
-    sed -n '1,200p' "$artifact_directory/plugin-enable.stderr" >&2
     echo "artifacts: $artifact_directory" >&2
     exit 1
 fi

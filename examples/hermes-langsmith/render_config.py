@@ -14,16 +14,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--template", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--atof-directory", required=True)
-    parser.add_argument("--atif-directory", required=True)
     parser.add_argument("--otlp-traces-endpoint", required=True)
     parser.add_argument("--project", required=True)
     args = parser.parse_args()
 
     rendered = args.template.read_text(encoding="utf-8")
     replacements = {
-        "__ATOF_OUTPUT_DIRECTORY__": args.atof_directory,
-        "__ATIF_OUTPUT_DIRECTORY__": args.atif_directory,
         "__OTLP_TRACES_ENDPOINT__": args.otlp_traces_endpoint,
         "__LANGSMITH_PROJECT__": args.project,
     }
