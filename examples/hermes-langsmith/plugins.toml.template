@@ -1,18 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+version = 1
+
 [[components]]
 kind = "observability"
-
-[components.config.opentelemetry]
 enabled = true
 
-[[components.config.opentelemetry.endpoints]]
-type = "openinference"
+[components.config]
+version = 2
+
+[components.config.openinference]
+enabled = true
+transport = "http_binary"
 endpoint = __OTLP_TRACES_ENDPOINT__
-
-[components.config.opentelemetry.endpoints.header_env]
-"x-api-key" = "LANGSMITH_API_KEY"
-
-[components.config.opentelemetry.endpoints.headers]
-"Langsmith-Project" = __LANGSMITH_PROJECT__
+service_name = "hermes-agent"

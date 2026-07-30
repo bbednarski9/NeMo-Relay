@@ -1104,7 +1104,7 @@ test-claude-plugin-e2e:
 test-hermes-mcp-e2e:
     ./scripts/test-hermes-mcp-e2e.sh
 
-# Opt-in: requires Hermes Agent and a Python binding built from this checkout.
+# Opt-in: requires Hermes Agent with native Relay plugin initialization and Relay 0.6.x.
 test-hermes-langsmith-example:
     ./examples/hermes-langsmith/run.sh local
 

@@ -5,21 +5,17 @@ SPDX-License-Identifier: Apache-2.0
 
 # Export Native Hermes Agent Telemetry to LangSmith
 
-This example uses Hermes Agent's first-party `observability/nemo_relay` plugin
-and a custom NeMo Relay `plugins.toml`. It sends a deterministic Hermes run to
-either a local OTLP capture server or LangSmith Cloud.
+This example exercises Hermes Agent's native NeMo Relay plugin initialization.
+Hermes reads `HERMES_NEMO_RELAY_PLUGINS_TOML` and calls
+`nemo_relay.plugin.initialize()` before it opens its first Relay session scope.
+It does not enable or load Hermes's optional `observability/nemo_relay` plugin,
+and it does not create a Hermes `config.yaml`.
 
-The two configuration files contain only the activation and export settings
-needed by this path:
-
-- [`config.yaml`](./config.yaml) enables Hermes' bundled plugin.
-- [`plugins.toml.template`](./plugins.toml.template) configures one NeMo Relay
-  OpenInference endpoint. Its rendered `plugins.toml` references the API-key
-  environment variable without storing the key.
-
-Hermes uses `config.yaml`, and NeMo Relay uses `plugins.toml` (plural). The
-bundled Hermes plugin has its own repository-owned `plugin.yaml`; users do not
-need to author a `config.toml` or `plugin.toml` for this integration.
+The example intentionally targets `nemo-relay` 0.6.x. Its minimal
+[`plugins.toml.template`](./plugins.toml.template) uses the Relay 0.6
+`openinference` component and sends OTLP/HTTP protobuf to either a local capture
+server or LangSmith Cloud. The runner rejects other Relay minor versions and
+any configuration validation warning or error.
 
 ## Why OpenInference over OTLP
 
@@ -29,33 +25,40 @@ configuration proves only the LangSmith trace path.
 
 LangSmith accepts OTLP and recognizes OpenInference attributes such as
 `openinference.span.kind`, `input.value`, `output.value`, `llm.model_name`, and
-`tool.name`. A generic NeMo Relay `full` endpoint would preserve more
-Relay-private fields, but `openinference` is the better default for LangSmith's
-trace UI and dataset workflows.
+`tool.name`. A generic OpenTelemetry export would preserve more Relay-private
+fields, but OpenInference is the better default for LangSmith's trace UI and
+dataset workflows.
 
 ## Prerequisites
 
-Install a Hermes Agent checkout or release that contains the first-party
-`observability/nemo_relay` plugin. Confirm it is visible with:
+Use the Hermes
+[`feat/relay-native-plugin-init`](https://github.com/bbednarski9/hermes-agent/tree/feat/relay-native-plugin-init)
+branch or a later Hermes build containing the same native initialization. The
+branch is based on Hermes main at `8defb9f` and requires no optional Hermes
+observability plugin.
+
+Install Hermes and its `nemo-relay` 0.6.x dependency in a Python environment
+using the Hermes repository's development instructions. Then point this
+example at that source tree and interpreter:
 
 ```bash
-hermes plugins list
+export HERMES_SOURCE="/absolute/path/to/hermes-agent"
+export HERMES_PYTHON="/absolute/path/to/hermes-venv/bin/python"
 ```
 
-Build the Python binding from this NeMo Relay checkout so Hermes exercises the
-same source and version-3 component schema as this example:
+If the branch has its own `.venv`, `HERMES_PYTHON` is optional. If an installed
+`hermes` launcher already contains the native initialization, both variables
+are optional.
 
-```bash
-just build-python
-```
+The runner performs two preflight checks before starting Hermes:
 
-The runner deliberately refuses to fall back to an older installed NeMo Relay
-wheel. Set `NEMO_RELAY_PYTHON_SOURCE` only when the binding was built in another
-NeMo Relay source tree. If the Hermes launcher does not expose its interpreter
-in the usual generated wrapper, set `HERMES_PYTHON` to that environment's
-Python executable. An `observability config version 3 is unsupported` diagnostic
-means Hermes imported an older NeMo Relay runtime instead of the binding built
-from this checkout.
+- `agent.relay_runtime` must expose native
+  `HERMES_NEMO_RELAY_PLUGINS_TOML` support.
+- The Hermes interpreter must import `nemo-relay` 0.6.x.
+
+The demo does not build or inject the NeMo Relay binding from this checkout.
+That is deliberate: it proves the published Relay 0.6 configuration path that
+Hermes currently depends on.
 
 ## Local Preflight
 
@@ -69,11 +72,13 @@ The command prints the artifact directory after all checks pass. Its rendered
 `plugins.toml` is the exact configuration Hermes consumed. The directory also
 contains:
 
-- `hermes-home/config.yaml`
+- `runtime-preflight.json`
+- `plugin-validation.json`
 - `otel-capture.jsonl`
 - `provider-requests.jsonl`
 - Hermes stdout and stderr
 
+The generated `hermes-home/` remains free of plugin activation configuration.
 Artifacts default to the repository's ignored `artifacts/` directory. Set
 `HERMES_LANGSMITH_ARTIFACT_DIR` to choose a stable path.
 
@@ -90,15 +95,18 @@ export LANGSMITH_PROJECT="hermes-nemo-relay-smoke"
 ```
 
 The runner derives `https://api.smith.langchain.com/otel/v1/traces`. Set
-`LANGSMITH_OTLP_ENDPOINT` explicitly for a different regional deployment. The
-API key is referenced through `header_env`; it is never written to
-`plugins.toml` or the artifacts.
+`LANGSMITH_OTLP_ENDPOINT` explicitly for a different regional deployment.
+
+Relay 0.6 does not support `header_env` in its OpenInference component. The
+runner therefore supplies `x-api-key` and `Langsmith-Project` through the
+standard `OTEL_EXPORTER_OTLP_HEADERS` environment variable. The API key is
+never written to `plugins.toml` or the artifacts.
 
 In LangSmith, open **Tracing Projects**, select
 `hermes-nemo-relay-smoke`, and inspect the newest root run. The trace tree
-should contain Hermes session/turn spans and an LLM child with `gpt-4o-mini`,
-the synthetic prompt, and `pong`. A real Hermes run that invokes a tool adds
-`TOOL` spans with `tool.name`, input, and output attributes.
+should contain Hermes session and turn spans and an LLM child with
+`gpt-4o-mini`, the synthetic prompt, and `pong`. A real Hermes run that invokes
+a tool adds `TOOL` spans with `tool.name`, input, and output attributes.
 
 ## Query Traces and Create a Dataset
 
@@ -129,6 +137,16 @@ source project, run ID, and trace ID in each example's metadata.
 For manual curation, select runs in a LangSmith tracing project and choose
 **Add to Dataset**. This is preferable when a reviewer should edit or reject
 examples before they become evaluation data.
+
+## Relay 0.7 Migration
+
+Do not use Relay 0.7's unified `opentelemetry.endpoints` syntax with the Hermes
+0.6 dependency. Relay 0.6 reports that field as unknown and will not use the
+configured endpoint.
+
+When Hermes updates to Relay 0.7, migrate this template to the unified endpoint
+schema and move the LangSmith headers back into the endpoint configuration.
+Until then, the version preflight keeps this example on the tested 0.6 path.
 
 ## Data and Security Notes
 

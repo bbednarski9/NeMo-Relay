@@ -31,7 +31,7 @@ def _verify_otlp(artifact_directory: Path, project: str) -> int:
     for request in requests:
         headers = {str(key).lower(): str(value) for key, value in request["headers"].items()}
         if headers.get("x-api-key") != "local-fixture-key":
-            raise AssertionError("the OTLP x-api-key header was not resolved through header_env")
+            raise AssertionError("the OTLP x-api-key header was not resolved from OTEL exporter headers")
         if headers.get("langsmith-project") != project:
             raise AssertionError("the OTLP Langsmith-Project header does not match the configured project")
 

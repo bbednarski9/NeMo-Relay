@@ -26,25 +26,22 @@ own the native Relay scopes and load a custom `plugins.toml` directly.
 
 ## Hermes-Owned In-Process Export
 
-Recent Hermes Agent builds include an opt-in `observability/nemo_relay` plugin.
-Hermes core owns the Relay session, turn, LLM, and tool scopes in process; the
-plugin loads exporters and adds Hermes-specific observer marks. Enable it in
-the same `HERMES_HOME` used for the agent run:
+Hermes builds with native Relay plugin initialization let Hermes core own the
+Relay session, turn, LLM, and tool scopes and load exporters directly. Point
+Hermes at a Relay plugin document before starting the agent:
 
 ```bash
-hermes plugins enable observability/nemo_relay
 export HERMES_NEMO_RELAY_PLUGINS_TOML=/absolute/path/to/plugins.toml
 hermes chat --query "Reply exactly ok" --provider custom --model <model>
 ```
 
-This path does not use the Relay MCP server or transparent wrapper. Do not
-combine multiple capture paths for the same model call unless duplicate spans
-are intentional.
+This path does not use Hermes's optional `observability/nemo_relay` plugin, the
+Relay MCP server, or a transparent wrapper. Do not combine multiple capture
+paths for the same model call unless duplicate spans are intentional.
 
-For a deterministic custom-component example that preserves ATOF and ATIF
-locally, projects Hermes events as OpenInference spans, sends them to a
-self-hosted LangSmith OTLP endpoint, queries the resulting traces, and creates
-a dataset, refer to the
+For a deterministic Relay 0.6 example that projects native Hermes events as
+OpenInference spans, sends them to a local capture or LangSmith Cloud, queries
+the resulting traces, and creates a dataset, refer to the
 [Hermes LangSmith example](https://github.com/NVIDIA/NeMo-Relay/tree/main/examples/hermes-langsmith).
 
 ## Install Persistent Capture
