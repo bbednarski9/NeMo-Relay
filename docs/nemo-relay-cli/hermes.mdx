@@ -1,18 +1,19 @@
 ---
 title: "Hermes Agent"
-description: "Configure Hermes to start and share the native NeMo Relay gateway through MCP."
+description: "Configure Hermes with a first-party in-process runtime, persistent MCP capture, or a transparent run."
 position: 7
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-NeMo Relay can observe Hermes through a persistent integration or a transparent
-run. The persistent integration uses the Hermes native studio MCP support to own a
-shared Relay gateway at `127.0.0.1:47632`. Shell hooks forward the Hermes native
-session, subagent, tool, and model lifecycle payloads to that gateway. If you
-also point the Hermes provider at the gateway, Relay observes the model requests
-and responses.
+NeMo Relay can observe Hermes through Hermes's first-party in-process runtime,
+a persistent integration, or a transparent run. The persistent integration uses
+the Hermes native studio MCP support to own a shared Relay gateway at
+`127.0.0.1:47632`. Shell hooks forward the Hermes native session, subagent,
+tool, and model lifecycle payloads to that gateway. If you also point the
+Hermes provider at the gateway, Relay observes the model requests and
+responses.
 
 The MCP process manages gateway lifetime through a shared lifecycle lease. You
 do not need a separate service manager, wrapper process, Node.js runtime, or
@@ -20,7 +21,31 @@ Python bootstrap component.
 
 Use persistent capture for ordinary `hermes` commands. Use a transparent run
 when you need project-specific Relay configuration or an isolated gateway for
-one Hermes process.
+one Hermes process. Use the first-party in-process runtime when Hermes should
+own the native Relay scopes and load a custom `plugins.toml` directly.
+
+## Hermes-Owned In-Process Export
+
+Recent Hermes Agent builds include an opt-in `observability/nemo_relay` plugin.
+Hermes core owns the Relay session, turn, LLM, and tool scopes in process; the
+plugin loads exporters and adds Hermes-specific observer marks. Enable it in
+the same `HERMES_HOME` used for the agent run:
+
+```bash
+hermes plugins enable observability/nemo_relay
+export HERMES_NEMO_RELAY_PLUGINS_TOML=/absolute/path/to/plugins.toml
+hermes chat --query "Reply exactly ok" --provider custom --model <model>
+```
+
+This path does not use the Relay MCP server or transparent wrapper. Do not
+combine multiple capture paths for the same model call unless duplicate spans
+are intentional.
+
+For a deterministic custom-component example that preserves ATOF and ATIF
+locally, projects Hermes events as OpenInference spans, sends them to a
+self-hosted LangSmith OTLP endpoint, queries the resulting traces, and creates
+a dataset, refer to the
+[Hermes LangSmith example](https://github.com/NVIDIA/NeMo-Relay/tree/main/examples/hermes-langsmith).
 
 ## Install Persistent Capture
 

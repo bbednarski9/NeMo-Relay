@@ -1104,6 +1104,10 @@ test-claude-plugin-e2e:
 test-hermes-mcp-e2e:
     ./scripts/test-hermes-mcp-e2e.sh
 
+# Opt-in: requires Hermes Agent and a Python binding built from this checkout.
+test-hermes-langsmith-example:
+    ./examples/hermes-langsmith/run.sh local
+
 # --set [output_dir=<path>] [ci=true|false]
 test-rust:
     #!/usr/bin/env bash

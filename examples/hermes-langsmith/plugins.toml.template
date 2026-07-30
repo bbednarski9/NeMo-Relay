@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 3
+
+# Preserve the canonical NeMo Relay events for local inspection.
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = __ATOF_OUTPUT_DIRECTORY__
+filename = "events.jsonl"
+mode = "overwrite"
+
+# Preserve a completed trajectory for replay and offline evaluation workflows.
+[components.config.atif]
+enabled = true
+output_directory = __ATIF_OUTPUT_DIRECTORY__
+filename_template = "trajectory-{session_id}.json"
+agent_name = "Hermes Agent"
+agent_version = "langsmith-example"
+model_name = "gpt-4o-mini"
+
+# LangSmith accepts OTLP traces and understands OpenInference semantic fields.
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+endpoint = __OTLP_TRACES_ENDPOINT__
+transport = "http_binary"
+service_name = "hermes-agent"
+service_namespace = "nemo-relay"
+service_version = "langsmith-example"
+instrumentation_scope = "nemo-relay.openinference"
+timeout_millis = 10000
+mark_projection = "inherit"
+
+[components.config.opentelemetry.endpoints.header_env]
+"x-api-key" = "LANGSMITH_API_KEY"
+
+[components.config.opentelemetry.endpoints.headers]
+"Langsmith-Project" = __LANGSMITH_PROJECT__
