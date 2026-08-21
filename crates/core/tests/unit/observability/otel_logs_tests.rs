@@ -328,6 +328,54 @@ fn direct_log_processor_records_queue_drops_on_shutdown() {
 }
 
 #[test]
+fn plugin_log_processor_reports_delivery_failures_on_shutdown() {
+    let runtime_diagnostics =
+        SignalRuntimeDiagnostics::new(Some("opentelemetry.logs.endpoints[0].endpoint".to_string()));
+    let delivery_diagnostics = Arc::new(LogDeliveryDiagnostics::new(
+        "https://collector.example/v1/logs".to_string(),
+        runtime_diagnostics.clone(),
+    ));
+    delivery_diagnostics.emitted.store(3, Ordering::Relaxed);
+    delivery_diagnostics.accepted.store(1, Ordering::Relaxed);
+    delivery_diagnostics.record_export_failure(&"synthetic export failure");
+    let processor = DiagnosticBatchLogProcessor {
+        inner: BatchLogProcessor::builder(InMemoryLogExporter::default()).build(),
+        diagnostics: delivery_diagnostics,
+    };
+
+    let error = processor
+        .shutdown_with_timeout(Duration::from_secs(1))
+        .expect_err("plugin-managed delivery failures should fail shutdown");
+    assert!(
+        error
+            .to_string()
+            .contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER)
+    );
+    assert!(error.to_string().contains("otel.logs_dropped (2)"));
+    assert!(error.to_string().contains("otel.logs_export_failed (1)"));
+
+    let diagnostics = runtime_diagnostics.snapshot();
+    let dropped = diagnostics
+        .get("otel.logs_dropped")
+        .expect("plugin-managed drop diagnostic");
+    assert_eq!(dropped.count, 2);
+    assert!(
+        dropped
+            .message
+            .contains("https://collector.example/v1/logs")
+    );
+    let export_failure = diagnostics
+        .get("otel.logs_export_failed")
+        .expect("plugin-managed export failure diagnostic");
+    assert_eq!(export_failure.count, 1);
+    assert!(
+        export_failure
+            .message
+            .contains("https://collector.example/v1/logs")
+    );
+}
+
+#[test]
 fn non_metric_mark_maps_structured_body_attributes_and_scope_context() {
     let (mut processor, exporter, provider) = processor(LogSeverity::Info);
     let parent_uuid = Uuid::now_v7();
