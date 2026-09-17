@@ -22,6 +22,11 @@ jobs:
           toolchain: ${{ steps.versions.outputs.rust_version }}
           components: rustfmt,clippy
           cache: false
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          shared-key: private-provider-dispatch
+          cache-all-crates: true
+          cache-on-failure: true
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57
         with:
           version: ${{ steps.versions.outputs.uv_version }}
@@ -34,7 +39,7 @@ jobs:
       - name: Native plugin and gateway regression suite
         run: |
           just build-test-plugin-fixtures
-          cargo nextest run --locked -p nemo-relay-cli -p nemo-relay -p nemo-relay-plugin -E 'test(private_provider) | test(provider_dispatch) | test(provider_capability) | test(provider_request) | test(caller_credential_target) | test(native_abi) | binary(native_plugin_tests)' --profile ci --no-fail-fast
+          cargo nextest run --locked -p nemo-relay-cli -p nemo-relay -p nemo-relay-plugin -E 'test(private_provider) | test(provider_dispatch) | test(provider_capability) | test(provider_request) | test(caller_credential_target) | test(native_abi) | binary(native_plugin_integration)' --profile ci --no-fail-fast
       - name: Canonical Rust suite
         if: ${{ !cancelled() }}
         run: just test-rust
