@@ -1,0 +1,137 @@
+---
+title: "Phase Five: Plugin Mechanism Diagnostics"
+description: "Planned native, worker, and worker-proto diagnostic integrations and their boundary with phase one."
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Status: planned producer integration. This branch captures the native/worker
+workstream and its dependencies; it does not implement new native or worker
+recording, SDK emission, or diagnostic RPCs.
+
+Branch: `bbednarski/diagnostics-phase-five`.
+Dependency: `bbednarski/diagnostics-phase-one` and its shared contracts, bounded
+store, runtime enablement, readers, and generic host activation adapter.
+
+The recovered design includes OTel as an additional delivery stage and numbers
+worker integration after language bindings. This branch uses the requested
+phase-five plugin workstream label; it does not reorder those dependencies.
+
+## Ownership Boundary
+
+| Owner | Work |
+| --- | --- |
+| Phase one: shared diagnostics | Runtime settings, identities, classifier contracts, component registration, counters, bounded retention, queries, and projections |
+| Phase one: generic plugin host | Configuration loading/resolution/validation observations and component activation failures/unwinds, independent of execution mechanism |
+| Phase five: native producers in core | Native loader/ABI observations and supported structured native classifications |
+| Phase five: dynamic trust/policy producers | Observations at the actual host policy/trust operation, with its typed result |
+| Phase five: worker producers and host client | Process launch, handshake, registration RPCs, runtime operations, cancellation, shutdown, and explicitly supported remote observations |
+| Phase five: worker SDK and worker-proto | Producer emission and negotiated, bounded diagnostic transport |
+
+Ownership follows the operation that observes a fact. The `core` crate contains
+both generic host code and mechanism-specific native/worker code. A crate path
+alone does not establish the integration phase.
+
+OTel diagnostics/report deduplication, CLI/daemon composition, and full public
+language-binding APIs retain their separate workstreams.
+
+## Current Coverage and Planned Context
+
+The phase-one automatic plugin recorder records component registration failures
+and activation unwinds. It supplies:
+
+```text
+phase = activation
+execution = absent
+```
+
+The existing `PluginExecution` and `PluginPhase` enums admit producer-authored
+context. Serialization and bounded-retention tests establish representation
+support. They do not establish that Relay automatically observes each value.
+
+| Context value | Current automatic plugin coverage | Required producer integration |
+| --- | --- | --- |
+| `Activation` | Registration failures and activation unwinds | Preserve the existing owning boundary |
+| `NativeAbi` execution | Absent | Verified native execution path |
+| `WorkerProtocol` execution | Absent | Verified worker execution path |
+| `Validation` | Absent | Actual validation operation with supported typed evidence |
+| `Runtime` | Absent | Actual native/worker runtime operation |
+| `Policy` | Absent | Actual host trust/policy evaluation |
+
+A generic host validation producer can be integrated under phase one without
+claiming native/worker validation coverage. Phase five owns the corresponding
+mechanism-specific producers. Producers leave unavailable context absent and
+never derive it from component names, error text, severity, or report contents.
+
+## Phase-One Configuration Follow-Up
+
+`ConfigurationInherited` has a live legacy warning/report producer. Its canonical
+recording remains a phase-one integration gap. Wire a best-effort
+`plugin.configuration` recorder from the owner's selected diagnostics context
+into configuration resolution. Record once where the observation originates,
+using state-only recording so existing operational output is preserved.
+
+Shared validation and discovery helpers must remain usable without initializing
+process diagnostics. An explicitly selected context must also reach activation;
+configuration and activation must not silently use different contexts.
+
+`ComponentReenabled` has only a legacy test-helper producer today. Its canonical
+catalogue entry is deferred until a production producer is integrated. Keep
+existing legacy report strings, configuration behavior, and tests.
+
+## Phase-Five Implementation Sequence
+
+1. **Define the producer inventory.** Identify each native, worker-client,
+   worker-process, and policy operation. Specify its owner, evidence, context,
+   occurrence semantics, and existing execution/report behavior before adding a
+   catalogue entry.
+2. **Classify before flattening.** Implement the shared classifier contract at
+   producers with access to structured errors. Preserve source errors and use
+   `Unknown` when the available error cannot establish a more specific cause.
+3. **Integrate host mechanism observations.** Supply the selected diagnostics
+   context through native/worker host construction. Populate execution only
+   from the verified execution path. Keep generic activation recording at its
+   existing owner and define how mechanism evidence reaches that observation.
+4. **Define worker transport.** Design explicitly bounded and negotiated
+   messages in `worker-proto`; preserve source/component identity, generation,
+   original observation time, sequence, count semantics, and loss information.
+   Introduce catalogue values with their production recording sites.
+5. **Integrate worker producers and SDK emission.** Keep SDK emission usable
+   without requiring the SDK to depend on core. Separate locally observed
+   transport failures from observations made inside the worker process.
+6. **Validate reader and lifecycle behavior.** Exercise failure, success,
+   reconnect, cancellation, shutdown, malformed/oversized input, disabled mode,
+   and bounded pressure at the directly affected surfaces.
+
+## Recording and Delivery Invariants
+
+- Give each observed operation one canonical recording owner. Do not record the
+  same occurrence again when wrapping an error, constructing a report, forwarding
+  evidence, or querying status. Distinct operations need explicitly documented
+  occurrence semantics before their counts are combined.
+- Preserve remote provenance. A host must not relabel worker observations as
+  host-local events or add cumulative remote totals again on every poll.
+- Bound message size, code/class metadata, batches, queues, retained remote
+  state, and reader materialization independently. Report truncation, rejection,
+  and transport loss through the supported contract.
+- Keep enablement centralized. Disabled contexts supply inert recorders and skip
+  diagnostic-only factories; producers do not scatter service checks throughout
+  operational code.
+- Preserve execution errors, native ABI/status meanings, cancellation behavior,
+  and existing worker/legacy report behavior. Any protocol or ABI change follows
+  its owning versioning and compatibility workflow.
+- Keep health classification, recovery policy, and alerts with the embedding
+  application or deployment owner.
+
+## Relevant Sources
+
+- [Shared context and wire contracts](../../crates/types/src/diagnostics.rs)
+- [Catalogue and producer classifier contract](../../crates/types/src/diagnostics/catalogue.rs)
+- [Core recording foundation](../../crates/core/src/diagnostics/mod.rs)
+- [Generic plugin activation owner](../../crates/core/src/plugin.rs)
+- [Dynamic plugin host](../../crates/core/src/plugin/dynamic/host.rs)
+- [Native producer](../../crates/core/src/plugin/dynamic/native.rs)
+- [Worker host client](../../crates/core/src/plugin/dynamic/worker.rs)
+- [Worker SDK](../../crates/worker/src/lib.rs)
+- [Worker protocol](../../crates/worker-proto/src/lib.rs)
+- [Current diagnostics reference](../reference/diagnostics.mdx)
