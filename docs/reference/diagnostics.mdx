@@ -98,7 +98,7 @@ failure counts intact.
 
 ## Shared Payload Models
 
-Producers, projections, and decoded events use the same public `Classification`,
+Producers and decoded events use the same public `Classification`,
 `PluginObservationContext`, and `DiagnosticCorrelation` payloads. Typed catalogue
 constructors supply canonical names without allocating strings. The payloads use
 borrowed-or-owned strings: decoded snapshots own their values and preserve names
@@ -145,7 +145,7 @@ continue; no historical refresh-summary store accumulates.
 
 Every accepted observation updates lifetime and current-summary totals when it
 is recorded. Work captured before a refresh can retain its original attribution
-on events and projections while counting in the current summary.
+on retained events while counting in the current summary.
 
 Event eviction preserves numeric totals. Closing a component retains its row
 until bounded reclamation requires space. Reclaiming that closed row removes
@@ -250,9 +250,10 @@ and saturated counts. A saturated count is a lower bound. Inspect coverage when
 interpreting missing evidence. JSON encodes 64-bit counts and sequences as decimal
 strings to preserve precision in every supported language.
 
-Producers must submit safe diagnostic detail. Byte limits do not redact payloads
-or credentials. Keep request/session correlation out of aggregate keys and avoid
-raw configuration or unreviewed source-error text.
+Diagnostic detail and caller-supplied correlation can contain restricted data.
+Byte limits do not redact payloads or credentials. Authorize access to readers
+and their responses; keep correlation out of aggregate keys. The service does
+not capture ordinary logs, prompts, or request bodies automatically.
 
 ## Operational Logging and Legacy Reports
 
@@ -261,6 +262,19 @@ Pass it to `LoggingRuntime::configure_with_diagnostics` to reuse existing
 filters, formatters, stderr, and file sinks. Eligible typed observations use an
 optional logging projection; ordinary operational log lines do not automatically
 enter diagnostic history.
+
+Projection callbacks receive `DiagnosticOutputSummary`, which contains only
+validated built-in classification, severity, outcome, occurrence count, sequence,
+time, and a service-generated component UUID. It contains no detail, component
+name, plugin context, configuration attribution, or caller correlation. Extension
+observations remain readable but do not automatically produce output. This is a
+Rust callback contract change from the initial foundation proposal.
+
+Core builds the summary at recording, independently of retained evidence. It
+enforces this boundary for ordinary recording calls as well as state-only calls.
+There is no automatic replay from diagnostic readers to logs, legacy reports,
+subscribers, or exporters. Existing event sanitization and export ordering remain
+unchanged.
 
 Recording is independent of log thresholds. Projections execute outside the
 state lock, and sink failures use a state-only recording path to avoid recursive
@@ -338,7 +352,7 @@ are rejected. Core admits recognized context into a private compact
 representation before recording; unfamiliar decoded context can still be read
 and forwarded without becoming accepted local input or a counter key.
 
-Known context construction and projection use borrowed canonical names without
+Known context construction and approved summary classification use borrowed names without
 string allocation. Owned snapshot decoding allocates caller-owned values;
 transport adapters must enforce their metadata and payload limits before
 materialization. The schema permits future names within a supported snapshot
@@ -363,8 +377,8 @@ classifiers and their unused code families arrive with their owning producer
 integrations. OTel failures, export successes, and context-expiration
 observations arrive with the separately scheduled OTel integration.
 
-CLI composition and HTTP hosting follow in phase 2; daemon workers and broker
-collection in phase 3; public language-binding APIs in phase 4; dynamic-plugin
+CLI composition and authorized HTTP inspection are implemented in phase 2,
+as described below. Daemon workers and broker collection follow in phase 3; public language-binding APIs in phase 4; dynamic-plugin
 transport in phase 5; and API conformance in phase 6. Detailed memory attribution
 and resource-metrics integration follow in phase 7. That phase will also evaluate
 read-only typed views over leased, copied query workspaces to avoid a JSON
@@ -372,4 +386,112 @@ round-trip for Rust readers. Phase 1 retains canonical JSON access and explicit
 owned snapshot conversion; consuming a page never pins retained history.
 CPU collection and generic measurement types/schema are also deferred; existing
 lifetime/timing fields remain available. Restart persistence remains later work.
-This API starts no diagnostics listener or background collection service.
+The core API starts no diagnostics listener or background collection service.
+CLI inspection reuses the existing gateway listener.
+
+
+## CLI Startup and Inspection
+
+Diagnostics is compiled in and disabled by default. Configure it through the
+existing CLI configuration layers:
+
+```toml
+[diagnostics]
+enabled = true
+http_read = true
+
+[diagnostics.limits]
+max_events = 256
+max_queries = 4
+max_snapshot_bytes = 131072
+```
+
+An explicit configuration replaces the user layer; the system layer retains its
+existing precedence. `run --config` takes precedence over the inherited path.
+`NEMO_RELAY_DIAGNOSTICS` and `NEMO_RELAY_DIAGNOSTICS_HTTP`, then
+`--diagnostics=true|false` and `--diagnostics-http=true|false`, override their
+respective settings. Limits come from the merged configuration. Command-line
+settings apply to that CLI process; an MCP client does not override an already
+running gateway's settings. A named logging
+configuration file affects logging only. Startup selects and validates diagnostics
+before configuring logging or activating plugins, and reuses the parsed inputs
+for runtime configuration. Repair/inspection commands keep their existing
+no-ambient configuration policy; daemon composition remains a later integration.
+
+For an explicit local view after command completion and logging teardown, use
+`--diagnostics-final`. It writes one bounded canonical JSON page to stderr and
+does not change command stdout or exit codes. Restricted detail appears only
+because the caller requested inspection. Pre-context failures cannot be retained.
+
+### Existing Gateway Reads
+
+```bash
+nemo-relay diagnostics --capabilities
+nemo-relay diagnostics --gateway-url http://127.0.0.1:4040
+nemo-relay diagnostics --query '{"component_key":"cli.gateway","max_events":10}'
+```
+
+Inspection connects only to an existing local gateway over the existing pinned
+TLS tunnel. It loads existing private credentials and sends a domain-separated
+diagnostics-read capability. Provider, hook, and shutdown credentials do not grant
+read access. Plain HTTP returns `426 authenticated_transport_required`; the
+diagnostic TLS connection has a five-second delivery deadline and exposes only
+diagnostic routes. Reads require whole-context authority because pages include global
+totals. Browser-origin requests are rejected. Enable HTTP inspection explicitly
+with `http_read`; loopback or public health access alone grants no authority.
+
+Inspection does not acquire, start, recover, or health-poll a gateway, and does not
+refresh its idle timer. A reused gateway keeps its own immutable diagnostic
+settings. Diagnostic settings are excluded from execution fingerprints, including
+forwarded diagnostic environment variables. Inspect effective settings with
+`--capabilities`; change them through the existing explicit gateway restart
+workflow. An older or unexposed endpoint reports unsupported/unavailable.
+
+| GET route | Response |
+| --- | --- |
+| `/_nemo_relay/v1/diagnostics/capabilities` | Effective enablement, limits, producer coverage, and query availability; no snapshot lease required. |
+| `/_nemo_relay/v1/diagnostics` | One canonical snapshot page. |
+| `/_nemo_relay/v1/diagnostics/components` | Canonical page with recent-event rows disabled. |
+| `/_nemo_relay/v1/diagnostics/events` | Canonical page with component rows disabled. |
+
+The optional `query` parameter contains percent-encoded JSON. Supported fields
+mirror `DiagnosticQuery` and add `schema_version`. Counts, sequences, and cursor
+values retain canonical decimal-string encoding. Unknown fields, oversized
+selectors, requests above configured page limits, and query strings above 4 KiB
+are rejected. Continuations retain the same selection and require authorization
+on every request; changed source state or scope returns `409 invalid_cursor`.
+
+All diagnostic responses use `Cache-Control: no-store`. Errors contain stable
+reasons without raw query/configuration values: `disabled` or `query_disabled`
+(`503`), `unsupported_schema` (`406`), invalid queries (`400`), invalid cursors
+(`409`), missing/invalid credentials (`401`/`403`), busy response/query capacity
+(`429`), and snapshot capacity (`422`). Diagnostic unavailability does not affect
+gateway execution admission.
+
+### CLI Producer Ownership and Memory
+
+The process owns finite recorders for command completion, post-startup
+configuration attempts, gateway bind/serve/shutdown, acquisition/recovery,
+child spawn/wait/cleanup, hook delivery, and upstream transport/body stages.
+Each boundary records its own outcome once. Command and child/request outcomes
+are distinct scopes, so their sum is not a unique failed-request count.
+Nonzero child exit is a notice; provider HTTP status is not inferred to be a
+transport failure. Header receipt and body completion are separate observations;
+a cancelled stream does not fabricate completion. Flattened errors retain an
+`unknown` cause. Logging and plugin adapters keep their existing recording owners.
+
+HTTP response storage is separate from core retention/query pools. It reserves
+`max(1, max_queries)` slots of `max(8192, max_snapshot_bytes)` bytes, using checked
+startup admission. Defaults add four 128 KiB response slots, or 512 KiB of payload
+backing. A response owns its slot until the final body reference is dropped;
+core snapshot leases are released before network delivery. Diagnostic TLS
+connections have separate permits with the same concurrency, a 16 KiB HTTP
+input buffer, a 32 KiB TLS output limit, and a five-second connection deadline.
+Existing gateway shutdown cancels those connections and stops new reads.
+Discovery remains
+available when collection is enabled with `max_queries = 0`. Requests do not
+alter counters, refresh markers, or deployment-owned health policy.
+
+Native/worker plugin callbacks, daemon collection, language bindings, OTel
+migration, and detailed resource attribution remain assigned to later phases.
+Configured log files retain their existing required-sink behavior.
